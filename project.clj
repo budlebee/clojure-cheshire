@@ -9,7 +9,8 @@
                  [ring-cors "0.1.13"]
                  [org.clojure/java.jdbc "0.6.1"]
                  [org.postgresql/postgresql "9.4-1201-jdbc41"]
-                 [com.github.seancorfield/honeysql "2.0.0-rc2"]]
+                 [com.github.seancorfield/honeysql "2.0.0-rc2"]
+                 [cheshire "5.10.0"]]
   :plugins [[lein-ring "0.12.5"]]
   :ring {:handler cheshire-cat.handler/app
          :port 8000}

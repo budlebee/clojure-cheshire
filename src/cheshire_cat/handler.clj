@@ -5,10 +5,24 @@
             [ring.middleware.json :as ring-json]
             [ring.util.response :as rr]
             [ring.middleware.cors :refer [wrap-cors]]
-
             [clojure.java.jdbc :as sql]))
 
 (def db "postgresql://localhost:5432/testdb")
+
+(extend-protocol clojure.java.jdbc/ISQLParameter
+  clojure.lang.IPersistentVector
+  (set-parameter [v ^java.sql.PreparedStatement stmt ^long i]
+    (let [conn (.getConnection stmt)
+          meta (.getParameterMetaData stmt)
+          type-name (.getParameterTypeName meta i)]
+      (if-let [elem-type (when (= (first type-name) \_) (apply str (rest type-name)))]
+        (.setObject stmt i (.createArrayOf conn elem-type (to-array v)))
+        (.setObject stmt i v)))))
+
+(extend-protocol clojure.java.jdbc/IResultSetReadColumn
+  java.sql.Array
+  (result-set-read-column [val _ _]
+    (into [] (.getArray val))))
 
 (defroutes app-routes
   (GET "/" [] (do (println "someone comes in!")
@@ -18,35 +32,40 @@
      {:name name
       :status :grinning}))
   (GET "/db" []
-    (do (println (sql/query "postgresql://localhost:5432/testdb"
-                            ["select * from testing"]))
-        (str "wow" "<h1>hello!</h1>" "data in DB: " (:data (first (sql/query "postgresql://localhost:5432/testdb"
-                                                                             ["select * from testing"]))))))
+    (do
+      (str "wow" "<h1>hello!</h1>" "data in DB: " (:data (first (sql/query "postgresql://localhost:5432/testdb"
+                                                                           ["select * from sentences"]))))))
   (POST "/get-sentence" req
-    (println (type (sql/query db
-                              ["select * from sentences"])))
-    (rr/response (sql/query db
-                            ["select * from sentences"])))
+    (def result
+      (sql/query db ["select id, content, created_by from posts"]))
+    (rr/response {:result result}))
+
   (POST "/add-sentence" req
-    ;(def addedBy (get (get req :body) "addedBy"))
-    ; addedby 에는 사용자 id 값, int 가 들어가야함.
-    (def text (get (get req :body) "text"))
-    (def con (sql/get-connection db))
-    (def val-to-insert
-      (.createArrayOf con "int" (into-array Integer [])))
-    (sql/insert! db
-                 :sentences {:text text :addedby 1234 :lovers val-to-insert :haters val-to-insert})
-    (rr/response {:addedBy 1234 :text text}))
-  (PUT "/love-sentence" req
-    ;(def addedBy (get (get req :body) "addedBy"))
-    ;(def bodyText (get (get req :body) "bodyText"))
-    ;(rr/response {:addedBy addedBy :bodyText bodyText})
-    )
-  (PUT "/hate-sentence" req
-    ;(def addedBy (get (get req :body) "addedBy"))
-    ;(def bodyText (get (get req :body) "bodyText"))
-    ;(rr/response {:addedBy addedBy :bodyText bodyText})
-    )
+    (def content
+      (get-in req [:body "content"]))
+    (def userId
+      (Integer/parseInt (get-in req [:body "userId"])))
+    (def post_id (get-in (first (sql/insert! db
+                                             :posts {:content content :created_by userId} {:return-keys ["id"]})) [:id]))
+    (sql/insert! db :loves {:user_id userId :post_id post_id})
+    (rr/response {:content content :userId userId}))
+
+  (POST "/love-sentence" req
+    (def post-id
+      (Integer/parseInt (get-in req [:body "postId"])))
+    (def user-id
+      (Integer/parseInt (get-in req [:body "userId"])))
+    (sql/insert! db :loves {:user_id user-id :post_id post-id})
+    (rr/response {:userId user-id :postId post-id}))
+
+  (POST "/hate-sentence" req
+    (def post-id
+      (Integer/parseInt (get-in req [:body "postId"])))
+    (def user-id
+      (Integer/parseInt (get-in req [:body "userId"])))
+    (sql/insert! db :hates {:user_id user-id :post_id post-id})
+    (rr/response {:userId user-id :postId post-id}))
+
   (POST "/signup" req
     (def nickname (get (get req :body) "nickname"))
     (def email (get (get req :body) "email"))

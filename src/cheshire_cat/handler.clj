@@ -9,20 +9,7 @@
 
 (def db "postgresql://localhost:5432/testdb")
 
-(extend-protocol clojure.java.jdbc/ISQLParameter
-  clojure.lang.IPersistentVector
-  (set-parameter [v ^java.sql.PreparedStatement stmt ^long i]
-    (let [conn (.getConnection stmt)
-          meta (.getParameterMetaData stmt)
-          type-name (.getParameterTypeName meta i)]
-      (if-let [elem-type (when (= (first type-name) \_) (apply str (rest type-name)))]
-        (.setObject stmt i (.createArrayOf conn elem-type (to-array v)))
-        (.setObject stmt i v)))))
 
-(extend-protocol clojure.java.jdbc/IResultSetReadColumn
-  java.sql.Array
-  (result-set-read-column [val _ _]
-    (into [] (.getArray val))))
 
 (defroutes app-routes
   (GET "/" [] (do (println "someone comes in!")
@@ -66,28 +53,28 @@
     (sql/insert! db :hates {:user_id user-id :post_id post-id})
     (rr/response {:userId user-id :postId post-id}))
 
+  (POST "/user-feed" req
+    (def user-id
+      (Integer/parseInt (get-in req [:body "userId"])))
+    (def result
+      (sql/query db [(format "select * from loves left outer join posts on loves.post_id = posts.id where loves.user_id=%s" user-id)]))
+    (rr/response {:result result}))
+
   (POST "/signup" req
     (def nickname (get (get req :body) "nickname"))
     (def email (get (get req :body) "email"))
     (sql/insert! db
                  :users {:email email :nickname nickname})
     (rr/response {:email email :nickname nickname}))
+
   (PUT "/put" []
     (rr/response {:name "put" :status "good"}))
+
   (DELETE "/delete" []
     (rr/response {:name "delete" :status "good"}))
+
   (route/not-found "Not Found"))
 
-;(sql/db-do-commands "postgresql://localhost:5432/testdb"
-;                    (sql/create-table-ddl :testing [[:data :text] [:id :int]]))
- ;(sql/db-do-commands "postgresql://localhost:5432/testdb"
- ;                      "drop table testing")                  
-
-;(sql/insert! "postgresql://localhost:5432/testdb"
- ;            :testing {:data "Hello second!" :id 1})
-; (sql/query "postgresql://localhost:5432/testdb"
-; [select * from testing] )
-;
 
 
 (def app

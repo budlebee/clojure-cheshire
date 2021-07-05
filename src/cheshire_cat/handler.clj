@@ -5,7 +5,9 @@
             [ring.middleware.json :as ring-json]
             [ring.util.response :as rr]
             [ring.middleware.cors :refer [wrap-cors]]
-            [clojure.java.jdbc :as sql]))
+            [clojure.java.jdbc :as sql]
+            [honey.sql :as honey]
+            [buddy.hashers :as hashers]))
 
 (def db "postgresql://localhost:5432/testdb")
 
@@ -72,10 +74,19 @@
     (def my-id
       (Integer/parseInt (get-in req [:body "myId"])))
     (def result
-      (sql/query db [(format "select * from loves left outer join posts on loves.post_id = posts.id where loves.user_id=%s and loves.deleted=false order by loves.id desc" user-id)]))
+      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id from loves left outer join posts on loves.post_id = posts.id where loves.user_id=%s and loves.deleted=false order by loves.id desc" user-id)]))
+    ;(def is-follow
+    ;  (sql/query db [""]))
     ; users 에서 해당 posts 의 id 랑 join 해서, 해당 문장을 추가한 사람의 닉네임도 가져오자.
     ; 또한 어차피 users 테이블을 훑어야 되는게, 이 유저의 닉네임도 가져와야지 화면에 표시해줄게 있네. 프로필사진같은것은 따로 하지말고, 몇가지 동물 아이콘중 고르라고 하자.
     ; 또한 해당유저와 내가 팔로우 관계인지 보여줘야된다. followers 도 훑어야함.
+    (rr/response {:result result}))
+
+  (POST "/gurus-feed" req
+    (def user-id
+      (Integer/parseInt (get-in req [:body "userId"])))
+    (def result
+      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id, users.nickname from posts left outer join users on posts.created_by=users.id where created_by in (select guru_id from followers where follower_id=%s) order by timestamp desc" user-id)]))
     (rr/response {:result result}))
 
   (POST "/follow" req
@@ -86,40 +97,40 @@
     (sql/insert! db :followers {:guru_id guru-id :follower_id follower-id})
     (rr/response {:guru_id guru-id :follower_id follower-id}))
 
-  (POST "/gurus-feed" req
-    (def user-id
-      (Integer/parseInt (get-in req [:body "userId"])))
-    (def result
-      (sql/query db [(format "select * from posts where created_by in (select guru_id from followers where follower_id=%s) order by timestamp desc" user-id)]))
-    ; users 에서 해당 posts 의 id 랑 join 해서, 해당 문장을 추가한 사람의 닉네임도 가져오자.
-    (rr/response {:result result}))
-
   (POST "/login" req
     (def email
-      (Integer/parseInt (get-in req [:body "email"])))
+      (get-in req [:body "email"]))
     (def pwd
-      (Integer/parseInt (get-in req [:body "pwd"])))
+      (get-in req [:body "pwd"]))
+    (def query-vector
+      (honey/format {:select [:hashed_pwd]
+                     :from   [:users]
+                     :where  [:= :users.email email]} {:inline true}))
+    (def hashed-pwd
+      (:hashed_pwd (first (sql/query db query-vector))))
  ; email 에 해당하는게 있는지 db에서 체크. 없다면 response 로 사용자가 없음 반환
     ; 사용자는 있음. 그럼 해당하는 pwd 값을 가져옴. pwd 해쉬돌린것과 일치하는지 체크. 다르다면 로그인 정보가 틀리다고 res.
     ; 사용자도 있고 비밀번호도 맞다면 세션 쿠키 관련된거 처리.
-    (rr/response {:result "good"}))
+    (def result
+      (get (hashers/verify pwd hashed-pwd) :valid))
+    (rr/response {:result result}))
 
   (POST "/email-verification" req
     (def email
-      (Integer/parseInt (get-in req [:body "email"])))
+      (get-in req [:body "email"]))
  ; email 주소로 메일 보내는 lambda 함수 호출.
     (rr/response {:result "good"}))
 
   (POST "/signup" req
     (def nickname
-      (Integer/parseInt (get-in req [:body "nickname"])))
+      (get-in req [:body "nickname"]))
     (def email
-      (Integer/parseInt (get-in req [:body "email"])))
-    (def pwd
-      (Integer/parseInt (get-in req [:body "pwd"])))
+      (get-in req [:body "email"]))
+    (def hashed-pwd
+      (hashers/derive (get-in req [:body "pwd"])))
     ; pwd 를 salt 랑 섞어서 해쉬화 해가지고 저장할 것.
     (sql/insert! db
-                 :users {:email email :nickname nickname})
+                 :users {:email email :nickname nickname :hashed_pwd hashed-pwd})
     (rr/response {:email email :nickname nickname}))
 
   (PUT "/put" []

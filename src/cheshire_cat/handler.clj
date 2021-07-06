@@ -1,5 +1,8 @@
+
 (ns cheshire-cat.handler
-  (:require [compojure.core :refer [defroutes GET POST PUT DELETE]]
+  (:gen-class)
+  (:require [config.core :refer [env]]
+            [compojure.core :refer [defroutes GET POST PUT DELETE]]
             [compojure.route :as route]
             [ring.middleware.defaults :refer [wrap-defaults site-defaults api-defaults]]
             [ring.middleware.json :as ring-json]
@@ -7,11 +10,20 @@
             [ring.middleware.cors :refer [wrap-cors]]
             [clojure.java.jdbc :as sql]
             [honey.sql :as honey]
-            [buddy.hashers :as hashers]))
+            [buddy.hashers :as hashers]
+            [buddy.sign.jwt :as jwt]
+            [buddy.sign.jws :as jws]))
 
-(def db "postgresql://localhost:5432/testdb")
 
+(def runtime (:runtime env))
+(def db-env (:db runtime))
+(def dbtype (:dbtype db-env))
+(def host (:host db-env))
+(def port (:port db-env))
+(def dbname (:dbname db-env))
 
+(def db (format "%s://%s:%s/%s" dbtype host port dbname))
+;(def db "postgresql://localhost:5432/testdb")
 
 (defroutes app-routes
   (GET "/" [] (do (println "someone comes in!")
@@ -111,6 +123,15 @@
  ; email 에 해당하는게 있는지 db에서 체크. 없다면 response 로 사용자가 없음 반환
     ; 사용자는 있음. 그럼 해당하는 pwd 값을 가져옴. pwd 해쉬돌린것과 일치하는지 체크. 다르다면 로그인 정보가 틀리다고 res.
     ; 사용자도 있고 비밀번호도 맞다면 세션 쿠키 관련된거 처리.
+
+    ;(def jwt-secret
+    ;  (:jwt-secret runtime))
+    ;(def data
+    ;  (jwt/sign {:userid 2} jwt-secret))
+    ;(jwt/unsign data jwt-secret)
+    ;(println "hi")
+
+
     (def result
       (get (hashers/verify pwd hashed-pwd) :valid))
     (rr/response {:result result}))
@@ -149,3 +170,6 @@
       (ring-json/wrap-json-response)
       (wrap-defaults api-defaults)
       (wrap-cors :access-control-allow-origin [#".*"] :access-control-allow-methods [:get :post])))
+
+
+(println "App start!!")

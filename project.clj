@@ -12,10 +12,14 @@
                  [com.github.seancorfield/honeysql "2.0.0-rc2"]
                  [cheshire "5.10.0"]
                  [buddy/buddy-hashers "1.8.1"]
-                 [honeysql "1.0.461"]]
+                 [buddy/buddy-sign "3.4.1"]
+                 [honeysql "1.0.461"]
+                 [yogthos/config "1.1.1"]]
   :plugins [[lein-ring "0.12.5"]]
   :ring {:handler cheshire-cat.handler/app
          :port 8000}
   :profiles
   {:dev {:dependencies [[javax.servlet/servlet-api "2.5"]
-                        [ring/ring-mock "0.3.2"]]}})
+                        [ring/ring-mock "0.3.2"]]
+         :resource-paths ["config/dev"]}
+   :prod {:resource-paths ["config/prod"]}})

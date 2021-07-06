@@ -20,6 +20,8 @@
 (def host (:host db-env))
 (def port (:port db-env))
 (def dbname (:dbname db-env))
+(def jwt-secret
+  (:jwt-secret runtime))
 
 (def db (format "%s://%s:%s/%s" dbtype host port dbname))
 ;(def db "postgresql://localhost:5432/testdb")
@@ -85,7 +87,7 @@
     (def my-id
       (Integer/parseInt (get-in req [:body "myId"])))
     (def result
-      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id from loves left outer join posts on loves.post_id = posts.id where loves.user_id=%s and loves.deleted=false order by loves.id desc" user-id)]))
+      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id from loves left outer join posts on loves.post_id = posts.id where loves.user_id=%s and loves.deleted=false order by loves.added_at desc" user-id)]))
     ;(def is-follow
     ;  (sql/query db [""]))
     ; users 에서 해당 posts 의 id 랑 join 해서, 해당 문장을 추가한 사람의 닉네임도 가져오자.
@@ -123,29 +125,17 @@
       (:hashed_pwd query-result))
     (def user-id
       (:id query-result))
- ; email 에 해당하는게 있는지 db에서 체크. 없다면 response 로 사용자가 없음 반환
-    ; 사용자는 있음. 그럼 해당하는 pwd 값을 가져옴. pwd 해쉬돌린것과 일치하는지 체크. 다르다면 로그인 정보가 틀리다고 res.
-    ; 사용자도 있고 비밀번호도 맞다면 세션 쿠키 관련된거 처리.
-
-    (def jwt-secret
-      (:jwt-secret runtime))
-    ;(def data
-    ;  (jwt/sign {:userid 2} jwt-secret))
-    ;(jwt/unsign data jwt-secret)
-    ;(println "hi")
-
-
     (def result
       (get (hashers/verify pwd hashed-pwd) :valid))
     (if result
       (let [claims {:aud user-id
                     :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
             token (jwt/sign claims jwt-secret {:alg :hs512})]
-        (rr/response {:result token}))
+        (rr/response {:result true :token token :userId user-id}))
       (rr/response {:result result})))
 
 
-    ;(rr/response {:result result}))
+
 
   (POST "/email-verification" req
     (def email
@@ -161,9 +151,13 @@
     (def hashed-pwd
       (hashers/derive (get-in req [:body "pwd"])))
     ; pwd 를 salt 랑 섞어서 해쉬화 해가지고 저장할 것.
-    (sql/insert! db
-                 :users {:email email :nickname nickname :hashed_pwd hashed-pwd})
-    (rr/response {:email email :nickname nickname}))
+    (def user-id (get-in (first (sql/insert! db
+                                             :users {:email email :nickname nickname :hashed_pwd hashed-pwd} {:return-keys ["id"]})) [:id]))
+    (rr/response {:email email :nickname nickname :userId user-id})
+    (let [claims {:aud user-id
+                  :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
+          token (jwt/sign claims jwt-secret {:alg :hs512})]
+      (rr/response {:result true :token token :userId user-id})))
 
   (PUT "/put" []
     (rr/response {:name "put" :status "good"}))

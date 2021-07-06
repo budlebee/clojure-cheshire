@@ -11,8 +11,7 @@
             [clojure.java.jdbc :as sql]
             [honey.sql :as honey]
             [buddy.hashers :as hashers]
-            [buddy.sign.jwt :as jwt]
-            [buddy.sign.jws :as jws]))
+            [buddy.sign.jwt :as jwt]))
 
 
 (def runtime (:runtime env))
@@ -115,17 +114,21 @@
     (def pwd
       (get-in req [:body "pwd"]))
     (def query-vector
-      (honey/format {:select [:hashed_pwd]
+      (honey/format {:select [:id :hashed_pwd]
                      :from   [:users]
                      :where  [:= :users.email email]} {:inline true}))
+    (def query-result
+      (first (sql/query db query-vector)))
     (def hashed-pwd
-      (:hashed_pwd (first (sql/query db query-vector))))
+      (:hashed_pwd query-result))
+    (def user-id
+      (:id query-result))
  ; email 에 해당하는게 있는지 db에서 체크. 없다면 response 로 사용자가 없음 반환
     ; 사용자는 있음. 그럼 해당하는 pwd 값을 가져옴. pwd 해쉬돌린것과 일치하는지 체크. 다르다면 로그인 정보가 틀리다고 res.
     ; 사용자도 있고 비밀번호도 맞다면 세션 쿠키 관련된거 처리.
 
-    ;(def jwt-secret
-    ;  (:jwt-secret runtime))
+    (def jwt-secret
+      (:jwt-secret runtime))
     ;(def data
     ;  (jwt/sign {:userid 2} jwt-secret))
     ;(jwt/unsign data jwt-secret)
@@ -134,7 +137,15 @@
 
     (def result
       (get (hashers/verify pwd hashed-pwd) :valid))
-    (rr/response {:result result}))
+    (if result
+      (let [claims {:aud user-id
+                    :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
+            token (jwt/sign claims jwt-secret {:alg :hs512})]
+        (rr/response {:result token}))
+      (rr/response {:result result})))
+
+
+    ;(rr/response {:result result}))
 
   (POST "/email-verification" req
     (def email
@@ -171,5 +182,3 @@
       (wrap-defaults api-defaults)
       (wrap-cors :access-control-allow-origin [#".*"] :access-control-allow-methods [:get :post])))
 
-
-(println "App start!!")

@@ -8,6 +8,7 @@
             [ring.middleware.json :as ring-json]
             [ring.util.response :as rr]
             [ring.middleware.cors :refer [wrap-cors]]
+            [ring.middleware.cookies :as cookies]
             [clojure.java.jdbc :as sql]
             [honey.sql :as honey]
             [buddy.hashers :as hashers]
@@ -127,11 +128,17 @@
       (:id query-result))
     (def result
       (get (hashers/verify pwd hashed-pwd) :valid))
+    ; 헤더에 set cookie 로 refresh token .
     (if result
       (let [claims {:aud user-id
                     :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
             token (jwt/sign claims jwt-secret {:alg :hs512})]
-        (rr/response {:result true :token token :userId user-id}))
+        (rr/set-cookie
+         (rr/response
+          {:result true :token token :userId user-id})
+         "cookie name"
+         "value"
+         {:max-age (* 30 24 60 60 1000) :path "/"}))
       (rr/response {:result result})))
 
 
@@ -173,6 +180,10 @@
   (-> app-routes
       (ring-json/wrap-json-body)
       (ring-json/wrap-json-response)
+      (cookies/wrap-cookies)
       (wrap-defaults api-defaults)
-      (wrap-cors :access-control-allow-origin [#".*"] :access-control-allow-methods [:get :post])))
+      (wrap-cors :access-control-allow-origin [#"http://localhost:3000"]
+                 :access-control-allow-methods [:get :post]
+                 :access-control-allow-credentials "true"
+                 :access-control-allow-headers #{"accept" "accept-encoding" "accept-language" "authorization" "content-type" "origin"})))
 

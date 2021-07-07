@@ -89,18 +89,26 @@
       (Integer/parseInt (get-in req [:body "myId"])))
     (def result
       (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id from loves left outer join posts on loves.post_id = posts.id where loves.user_id=%s and loves.deleted=false order by loves.added_at desc" user-id)]))
+    (def user-nickname
+      (sql/query db [(format "select nickname from users where id=%s" user-id)]))
+    ; followers 목록에서, guru_id = user-id 이고 follower_id = my-id 인 경우 true.
     ;(def is-follow
+    ; follower 인지 guru 인지도 구분해야하네. 여기선 is-guru 로 체크하자.
     ;  (sql/query db [""]))
     ; users 에서 해당 posts 의 id 랑 join 해서, 해당 문장을 추가한 사람의 닉네임도 가져오자.
     ; 또한 어차피 users 테이블을 훑어야 되는게, 이 유저의 닉네임도 가져와야지 화면에 표시해줄게 있네. 프로필사진같은것은 따로 하지말고, 몇가지 동물 아이콘중 고르라고 하자.
     ; 또한 해당유저와 내가 팔로우 관계인지 보여줘야된다. followers 도 훑어야함.
     (rr/response {:result result}))
 
+  (POST "get-my-followers" req
+    ; 나를 팔로우 하고 있는 사람들의 목록을 보여주는 api.
+    )
+
   (POST "/gurus-feed" req
-    (def user-id
-      (Integer/parseInt (get-in req [:body "userId"])))
+    (def my-id
+      (Integer/parseInt (get-in req [:body "myId"])))
     (def result
-      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id, users.nickname from posts left outer join users on posts.created_by=users.id where created_by in (select guru_id from followers where follower_id=%s) order by timestamp desc" user-id)]))
+      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id, users.nickname from posts left outer join users on posts.created_by=users.id where created_by in (select guru_id from followers where follower_id=%s) order by timestamp desc" my-id)]))
     (rr/response {:result result}))
 
   (POST "/follow" req
@@ -128,51 +136,76 @@
       (:id query-result))
     (def result
       (get (hashers/verify pwd hashed-pwd) :valid))
-    ; 헤더에 set cookie 로 refresh token .
     (if result
       (let [claims {:aud user-id
                     :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
-            token (jwt/sign claims jwt-secret {:alg :hs512})]
+            token (jwt/sign claims jwt-secret {:alg :hs512})
+            rftk-value (java.util.UUID/randomUUID)]
+        (sql/insert! db
+                     :refresh_tokens {:value rftk-value :user_id user-id})
         (rr/set-cookie
          (rr/response
           {:result true :token token :userId user-id})
-         "cookie name"
-         "value"
-         {:max-age (* 30 24 60 60 1000) :path "/"}))
+         "rftk"
+         rftk-value
+         {:max-age (* 3 24 60 60) :path "/" :http-only "true"}))
       (rr/response {:result result})))
 
+  (POST "/silent-refresh" req
+    (def req-rftk-value
+      (get (get-in req [:cookies "rftk"]) :value))
+
+    (def user-id (:user_id (first (sql/query db (honey/format {:select [:user_id]
+                                                               :from   [:refresh_tokens]
+                                                               :where  [:= :value req-rftk-value]} {:inline true})))))
+    (if user-id
+      (let [claims {:aud user-id
+                    :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
+            token (jwt/sign claims jwt-secret {:alg :hs512})
+            rftk-value (java.util.UUID/randomUUID)]
+        (sql/insert! db
+                     :refresh_tokens {:value rftk-value :user_id user-id})
+
+        (rr/set-cookie
+         (rr/response
+          {:result true :token token :userId user-id})
+         "rftk"
+         rftk-value
+         {:max-age (* 3 24 60 60) :path "/" :http-only "true"}))
+      (rr/response {:result false})))
+    ; req 에 rftk 토큰이 있고 jwt 와 값이 같다면 jwt 를 발급.
+  (rr/response {:result "good"}))
 
 
-
-  (POST "/email-verification" req
-    (def email
-      (get-in req [:body "email"]))
+(POST "/email-verification" req
+  (def email
+    (get-in req [:body "email"]))
  ; email 주소로 메일 보내는 lambda 함수 호출.
-    (rr/response {:result "good"}))
+  (rr/response {:result "good"}))
 
-  (POST "/signup" req
-    (def nickname
-      (get-in req [:body "nickname"]))
-    (def email
-      (get-in req [:body "email"]))
-    (def hashed-pwd
-      (hashers/derive (get-in req [:body "pwd"])))
+(POST "/signup" req
+  (def nickname
+    (get-in req [:body "nickname"]))
+  (def email
+    (get-in req [:body "email"]))
+  (def hashed-pwd
+    (hashers/derive (get-in req [:body "pwd"])))
     ; pwd 를 salt 랑 섞어서 해쉬화 해가지고 저장할 것.
-    (def user-id (get-in (first (sql/insert! db
-                                             :users {:email email :nickname nickname :hashed_pwd hashed-pwd} {:return-keys ["id"]})) [:id]))
-    (rr/response {:email email :nickname nickname :userId user-id})
-    (let [claims {:aud user-id
-                  :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
-          token (jwt/sign claims jwt-secret {:alg :hs512})]
-      (rr/response {:result true :token token :userId user-id})))
+  (def user-id (get-in (first (sql/insert! db
+                                           :users {:email email :nickname nickname :hashed_pwd hashed-pwd} {:return-keys ["id"]})) [:id]))
+  (rr/response {:email email :nickname nickname :userId user-id})
+  (let [claims {:aud user-id
+                :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
+        token (jwt/sign claims jwt-secret {:alg :hs512})]
+    (rr/response {:result true :token token :userId user-id})))
 
-  (PUT "/put" []
-    (rr/response {:name "put" :status "good"}))
+(PUT "/put" []
+  (rr/response {:name "put" :status "good"}))
 
-  (DELETE "/delete" []
-    (rr/response {:name "delete" :status "good"}))
+(DELETE "/delete" []
+  (rr/response {:name "delete" :status "good"}))
 
-  (route/not-found "Not Found"))
+(route/not-found "Not Found")
 
 
 

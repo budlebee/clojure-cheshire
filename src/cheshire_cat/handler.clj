@@ -88,9 +88,13 @@
     (def my-id
       (Integer/parseInt (get-in req [:body "myId"])))
     (def result
-      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id from loves left outer join posts on loves.post_id = posts.id where loves.user_id=%s and loves.deleted=false order by loves.added_at desc" user-id)]))
+      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id, users.nickname as nickname from loves left outer join posts on loves.post_id = posts.id left outer join users on posts.created_by=users.id where loves.user_id=%s and loves.deleted=false order by loves.added_at desc" user-id)]))
     (def user-nickname
-      (sql/query db [(format "select nickname from users where id=%s" user-id)]))
+      (:nickname (first (sql/query db [(format "select nickname from users where id=%s limit 1" user-id)]))))
+    (def is-guru
+      (if-not (= 0 (count (sql/query db [(format "select id from followers where guru_id=%s and follower_id=%s and deleted=false limit 1" user-id my-id)])))
+        true
+        false))
     ; followers 목록에서, guru_id = user-id 이고 follower_id = my-id 인 경우 true.
     ;(def is-follow
     ; follower 인지 guru 인지도 구분해야하네. 여기선 is-guru 로 체크하자.
@@ -98,17 +102,17 @@
     ; users 에서 해당 posts 의 id 랑 join 해서, 해당 문장을 추가한 사람의 닉네임도 가져오자.
     ; 또한 어차피 users 테이블을 훑어야 되는게, 이 유저의 닉네임도 가져와야지 화면에 표시해줄게 있네. 프로필사진같은것은 따로 하지말고, 몇가지 동물 아이콘중 고르라고 하자.
     ; 또한 해당유저와 내가 팔로우 관계인지 보여줘야된다. followers 도 훑어야함.
-    (rr/response {:result result}))
+    (rr/response {:result result :isGuru is-guru :userNickname user-nickname}))
 
-  (POST "get-my-followers" req
+  ;(POST "get-my-followers" req
     ; 나를 팔로우 하고 있는 사람들의 목록을 보여주는 api.
-    )
+  ;  (rr/response {}))
 
   (POST "/gurus-feed" req
     (def my-id
       (Integer/parseInt (get-in req [:body "myId"])))
     (def result
-      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id, users.nickname from posts left outer join users on posts.created_by=users.id where created_by in (select guru_id from followers where follower_id=%s) order by timestamp desc" my-id)]))
+      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id, users.nickname from posts left outer join users on posts.created_by=users.id where created_by in (select guru_id from followers where follower_id=%s and deleted=false) order by timestamp desc" my-id)]))
     (rr/response {:result result}))
 
   (POST "/follow" req
@@ -116,8 +120,28 @@
       (Integer/parseInt (get-in req [:body "guruId"])))
     (def follower-id
       (Integer/parseInt (get-in req [:body "userId"])))
-    (sql/insert! db :followers {:guru_id guru-id :follower_id follower-id})
-    (rr/response {:guru_id guru-id :follower_id follower-id}))
+    (def was-guru
+      (if-not (= 0 (count (sql/query db [(format "select id from followers where guru_id=%s and follower_id=%s and deleted=true limit 1" guru-id follower-id)])))
+        true
+        false))
+    ; if 문으로 예전에 팔로우 한적 있는지 중복 체크를 먼저 하고, 중복있다면 deleted true 를 false. 없다면 (if )
+    ; 쿼리를 두번 날리지 않고, sql if then else 쓰면 한번에 될텐데 지금은 잘 모르겠다.
+    (if was-guru
+      (sql/execute! db [(format "update followers set deleted=false where guru_id=%s and follower_id=%s and deleted=true" guru-id follower-id)])
+      (sql/insert! db :followers {:guru_id guru-id :follower_id follower-id}))
+    ;(sql/insert! db :followers {:guru_id guru-id :follower_id follower-id})
+    (rr/response {:guruId guru-id :followerId follower-id :isGuru true}))
+
+  (POST "/unfollow" req
+    (def guru-id
+      (Integer/parseInt (get-in req [:body "guruId"])))
+    (def follower-id
+      (Integer/parseInt (get-in req [:body "userId"])))
+    ;(sql/execute! db (honey/format {:update :followers
+     ;                               :set {:deleted true}
+      ;                              :where [[:= :deleted false] [:= :guru_id guru-id] [:= :follower_id follower-id]]}))
+    (sql/execute! db [(format "update followers set deleted=true where guru_id=%s and follower_id=%s and deleted=false" guru-id follower-id)])
+    (rr/response {:guruId guru-id :followerId follower-id :isGuru false}))
 
   (POST "/login" req
     (def email
@@ -127,7 +151,8 @@
     (def query-vector
       (honey/format {:select [:id :hashed_pwd]
                      :from   [:users]
-                     :where  [:= :users.email email]} {:inline true}))
+                     :where  [:= :users.email email]
+                     :limit 1} {:inline true}))
     (def query-result
       (first (sql/query db query-vector)))
     (def hashed-pwd
@@ -157,7 +182,8 @@
 
     (def user-id (:user_id (first (sql/query db (honey/format {:select [:user_id]
                                                                :from   [:refresh_tokens]
-                                                               :where  [:= :value req-rftk-value]} {:inline true})))))
+                                                               :where  [:= :value req-rftk-value]
+                                                               :limit 1} {:inline true})))))
     (if user-id
       (let [claims {:aud user-id
                     :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}

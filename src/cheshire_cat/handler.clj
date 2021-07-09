@@ -49,10 +49,16 @@
       (Integer/parseInt (get-in req [:body "userId"])))
     ;(def result
      ; (sql/query db [(format "select * from posts where id not in ((select post_id from loves where user_id=%s) union (select post_id from hates where user_id=%s))" user-id user-id)]))
+    ;(def result
+    ;  (sql/query db [(format "select * from posts left outer join (select post_id, count (*) from loves group by post_id) as ranking on posts.id=ranking.post_id where id not in ((select post_id from loves where user_id=%s) union (select post_id from hates where user_id=%s)) order by ranking.count asc" user-id user-id)]))
     (def result
-      (sql/query db [(format "select * from posts left outer join (select post_id, count (*) from loves group by post_id) as ranking on posts.id=ranking.post_id where id not in ((select post_id from loves where user_id=%s) union (select post_id from hates where user_id=%s)) order by ranking.count asc" user-id user-id)]))
+      (sql/query db [(format "select posts.id, posts.content, posts.created_by, posts.timestamp, coalesce(correlation,0)+coalesce(count, 0) as rank from posts left outer join (select post_id, count (*) from loves group by post_id) as ranking on posts.id=ranking.post_id 
+left outer join (select post_id, count(*) as correlation from loves where user_id in (select user_id from loves where post_id in (select post_id from loves where user_id = %s) and user_id != %s) group by post_id order by post_id) as relation on posts.id = relation.post_id
+where id not in ((select post_id from loves where user_id = %s) union (select post_id from hates where user_id= %s)) order by rank desc;" user-id user-id user-id user-id)]))
     ; 해당 사용자의 nickname 도 가져오면 좋겠는걸. 근데 그러려면 users 테이블도 참고해야 되니 join 을 한번 더 해야되네.
     ; 그럼 get-sentence 에선 하지말자. 하지만 my-feed 에서는 할 수 있게 하자.
+
+
     (rr/response {:result result}))
 
   (POST "/add-sentence" req

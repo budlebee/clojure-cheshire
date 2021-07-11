@@ -12,7 +12,11 @@
             [clojure.java.jdbc :as sql]
             [honey.sql :as honey]
             [buddy.hashers :as hashers]
-            [buddy.sign.jwt :as jwt]))
+            [buddy.sign.jwt :as jwt]
+            [clj-time.core]
+            [clj-time.coerce]
+            [clj-time.local]))
+
 
 
 (def runtime (:runtime env))
@@ -41,7 +45,7 @@
 
   (POST "/guest-get-sentence" req
     (def result
-      (sql/query db ["select * from posts left outer join (select post_id, count (*) from loves group by post_id) as ranking on posts.id=ranking.post_id order by ranking.count asc"]))
+      (sql/query db ["select posts.id, posts.content, posts.created_by, posts.timestamp, coalesce(count, 0) as rank from posts left outer join (select post_id, count (*) from loves group by post_id) as ranking on posts.id=ranking.post_id order by rank desc"]))
     (rr/response {:result result}))
 
   (POST "/get-sentence" req
@@ -52,9 +56,9 @@
     ;(def result
     ;  (sql/query db [(format "select * from posts left outer join (select post_id, count (*) from loves group by post_id) as ranking on posts.id=ranking.post_id where id not in ((select post_id from loves where user_id=%s) union (select post_id from hates where user_id=%s)) order by ranking.count asc" user-id user-id)]))
     (def result
-      (sql/query db [(format "select posts.id, posts.content, posts.created_by, posts.timestamp, coalesce(correlation,0)+coalesce(count, 0) as rank from posts left outer join (select post_id, count (*) from loves group by post_id) as ranking on posts.id=ranking.post_id 
+      (sql/query db [(format "select posts.id, posts.content, posts.created_by, posts.timestamp, 5*coalesce(correlation,0)+coalesce(count, 0) as rank from posts left outer join (select post_id, count (*) from loves group by post_id) as ranking on posts.id=ranking.post_id 
 left outer join (select post_id, count(*) as correlation from loves where user_id in (select user_id from loves where post_id in (select post_id from loves where user_id = %s) and user_id != %s) group by post_id order by post_id) as relation on posts.id = relation.post_id
-where id not in ((select post_id from loves where user_id = %s) union (select post_id from hates where user_id= %s)) order by rank desc;" user-id user-id user-id user-id)]))
+where id not in ((select post_id from loves where user_id = %s) union (select post_id from hates where user_id= %s)) order by rank desc limit 10;" user-id user-id user-id user-id)]))
     ; 해당 사용자의 nickname 도 가져오면 좋겠는걸. 근데 그러려면 users 테이블도 참고해야 되니 join 을 한번 더 해야되네.
     ; 그럼 get-sentence 에선 하지말자. 하지만 my-feed 에서는 할 수 있게 하자.
 
@@ -94,7 +98,7 @@ where id not in ((select post_id from loves where user_id = %s) union (select po
     (def my-id
       (Integer/parseInt (get-in req [:body "myId"])))
     (def result
-      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id, users.nickname as nickname from loves left outer join posts on loves.post_id = posts.id left outer join users on posts.created_by=users.id where loves.user_id=%s and loves.deleted=false order by loves.added_at desc" user-id)]))
+      (sql/query db [(format "select posts.content, posts.timestamp, posts.created_by, posts.id as post_id, users.nickname as nickname, loves.added_at as added_at from loves left outer join posts on loves.post_id = posts.id left outer join users on posts.created_by=users.id where loves.user_id=%s and loves.deleted=false order by loves.added_at desc" user-id)]))
     (def user-nickname
       (:nickname (first (sql/query db [(format "select nickname from users where id=%s limit 1" user-id)]))))
     (def is-guru
@@ -152,6 +156,7 @@ where id not in ((select post_id from loves where user_id = %s) union (select po
                      :from   [:users]
                      :where  [:= :users.email email]
                      :limit 1} {:inline true}))
+
     (def query-result
       (first (sql/query db query-vector)))
     (def hashed-pwd
@@ -175,7 +180,17 @@ where id not in ((select post_id from loves where user_id = %s) union (select po
          {:max-age (* 3 24 60 60) :path "/" :http-only "true"}))
       (rr/response {:result result})))
 
+  (POST "/logout" req
+    (println "run logout")
+    (rr/set-cookie
+     (rr/response
+      {:result true})
+     "rftk"
+     "kill"
+     {:max-age (* 1 1) :path "/" :http-only "true"}))
+
   (POST "/silent-refresh" req
+    (println "run silent-refresh")
     (def req-user-id-cookie-value
       (get (get-in req [:cookies "user-id"]) :value))
     ;(if-not req-user-id-cookie-value (rr/bad-request {:message "no user-id cookie"}))
@@ -198,7 +213,12 @@ where id not in ((select post_id from loves where user_id = %s) union (select po
          "rftk"
          rftk-value
          {:max-age (* 3 24 60 60) :path "/" :http-only "true"}))
-      (rr/response {:result false})))
+      (rr/set-cookie
+       (rr/response
+        {:result false})
+       "rftk"
+       "kill"
+       {:max-age (* 1 1) :path "/" :http-only "true"})))
 
 
   (POST "/email-verification" req
@@ -208,20 +228,35 @@ where id not in ((select post_id from loves where user_id = %s) union (select po
     (rr/response {:result "good"}))
 
   (POST "/signup" req
-    (def nickname
-      (get-in req [:body "nickname"]))
-    (def email
-      (get-in req [:body "email"]))
-    (def hashed-pwd
-      (hashers/derive (get-in req [:body "pwd"])))
-    ; pwd 를 salt 랑 섞어서 해쉬화 해가지고 저장할 것.
-    (def user-id (get-in (first (sql/insert! db
-                                             :users {:email email :nickname nickname :hashed_pwd hashed-pwd} {:return-keys ["id"]})) [:id]))
-    (rr/response {:email email :nickname nickname :userId user-id})
-    (let [claims {:aud user-id
-                  :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
-          token (jwt/sign claims jwt-secret {:alg :hs512})]
-      (rr/response {:result true :token token :userId user-id})))
+    ;(try ()(catch Exception e ))
+    (do
+      (println (get req :body))
+      (def nickname
+        (get-in req [:body "nickname"]))
+      (def email
+        (get-in req [:body "email"]))
+      (def hashed-pwd
+        (hashers/derive (get-in req [:body "pwd"])))
+
+      (if (> (count (sql/query db (honey/format {:select [:id]
+                                                 :from [:users]
+                                                 :where [:= :users.email email]} {:inline true}))) 0)
+        (do (rr/response {:result false :message "이미 회원가입한 이메일입니다."}))
+        ((do (def user-id (get-in (first (sql/insert! db
+                                                      :users {:email email :nickname nickname :hashed_pwd hashed-pwd} {:return-keys ["id"]})) [:id]))
+             (if (def temp-love
+                   (Integer/parseInt (get-in req [:body "tempLove"])))
+               (sql/insert! db :loves {:post_id temp-love :user_id user-id}) ())
+             (let [claims {:aud user-id
+                           :exp (+ (quot (System/currentTimeMillis) 1000) 3600)}
+                   token (jwt/sign claims jwt-secret {:alg :hs512})
+                   rftk-value (java.util.UUID/randomUUID)]
+               (rr/set-cookie
+                (rr/response
+                 {:result true :token token :userId user-id})
+                "rftk"
+                rftk-value
+                {:max-age (* 3 24 60 60) :path "/" :http-only "true"})))))))
 
   (PUT "/put" []
     (rr/response {:name "put" :status "good"}))
@@ -232,7 +267,7 @@ where id not in ((select post_id from loves where user_id = %s) union (select po
   (route/not-found "Not Found"))
 
 
-
+(try (/ 1 0) (catch Exception e (str "error occur: " (.getMessage e))))
 
 (def app
   (-> app-routes

@@ -14,7 +14,8 @@
                  [buddy/buddy-hashers "1.8.1"]
                  [buddy/buddy-sign "3.4.1"]
                  [honeysql "1.0.461"]
-                 [yogthos/config "1.1.1"]]
+                 [yogthos/config "1.1.1"]
+                 [clj-time "0.15.2"]]
   :plugins [[lein-ring "0.12.5"]]
   :ring {:handler cheshire-cat.handler/app
          :port 8000}
